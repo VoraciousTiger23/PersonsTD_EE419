@@ -47,7 +47,7 @@ static void led_color_cycle_task(void *arg)
         {true,  true,  false}, // Yellow
         {true,  false, true }, // Magenta
         {false, true,  true }, // Cyan
-        {false, false, false} // Off
+        {false, false, false}  // Off
     };
 
     while (1) {
