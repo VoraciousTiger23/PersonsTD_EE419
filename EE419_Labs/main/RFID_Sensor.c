@@ -1,11 +1,13 @@
 #include "RFID_Sensor.h"
 
 #include <stddef.h>
+#include <stdint.h>
 #include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
@@ -28,6 +30,56 @@ static const char *TAG = "RFID_Sensor";
 // NVS namespace/key
 #define NVS_NAMESPACE "rfid"
 #define NVS_KEY_SAVED_UID "saved_uid"
+
+// Last-detected UID storage (shared with web UI)
+static uint8_t s_last_uid[10];
+static size_t s_last_uid_len = 0;
+static bool s_last_uid_present = false;
+static SemaphoreHandle_t s_last_uid_mutex = NULL;
+
+void RFID_set_last_uid(const uint8_t *uid, size_t len)
+{
+    if (!s_last_uid_mutex) s_last_uid_mutex = xSemaphoreCreateMutex();
+    if (!s_last_uid_mutex) return;
+    if (xSemaphoreTake(s_last_uid_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        size_t n = len;
+        if (n > sizeof(s_last_uid)) n = sizeof(s_last_uid);
+        memcpy(s_last_uid, uid, n);
+        s_last_uid_len = n;
+        s_last_uid_present = true;
+        xSemaphoreGive(s_last_uid_mutex);
+    }
+}
+
+bool RFID_get_last_uid(uint8_t *buf, size_t *len)
+{
+    if (!s_last_uid_mutex) s_last_uid_mutex = xSemaphoreCreateMutex();
+    if (!s_last_uid_mutex) return false;
+    bool present = false;
+    if (xSemaphoreTake(s_last_uid_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        if (s_last_uid_present) {
+            memcpy(buf, s_last_uid, s_last_uid_len);
+            *len = s_last_uid_len;
+            present = true;
+        } else {
+            *len = 0;
+            present = false;
+        }
+        xSemaphoreGive(s_last_uid_mutex);
+    }
+    return present;
+}
+
+void RFID_clear_last_uid(void)
+{
+    if (!s_last_uid_mutex) s_last_uid_mutex = xSemaphoreCreateMutex();
+    if (!s_last_uid_mutex) return;
+    if (xSemaphoreTake(s_last_uid_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        s_last_uid_present = false;
+        s_last_uid_len = 0;
+        xSemaphoreGive(s_last_uid_mutex);
+    }
+}
 
 void rgb_set_color(bool red, bool green, bool blue)
 {
@@ -120,6 +172,8 @@ static void pn532_scan_task(void *arg)
         uid_len = sizeof(uid);
         esp_err_t r = pn532_read_passive_target_id(io_handle, PN532_BRTY_ISO14443A_106KBPS, uid, &uid_len, 1000);
         if (r == ESP_OK) {
+            // update last-detected UID for web UI
+            RFID_set_last_uid(uid, uid_len);
             ESP_LOGI(TAG, "Tag detected len=%d", uid_len);
             if (!has_saved) {
                 // store first seen UID to NVS
@@ -149,6 +203,8 @@ static void pn532_scan_task(void *arg)
             }
         } else {
             // no tag detected in timeout
+            // clear last-detected UID when no tag present
+            RFID_clear_last_uid();
             if (!has_saved) {
                 // keep blue until first detection
                 rgb_set_color(false, false, true);
