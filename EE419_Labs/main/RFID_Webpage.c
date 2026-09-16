@@ -10,7 +10,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "mdns.h"
-#include "esp_sntp.h"
+#include "lwip/apps/sntp.h"
 #include "esp_err.h"
 #include "esp_http_server.h"
 
@@ -47,21 +47,12 @@ static esp_err_t status_get_handler(httpd_req_t *req)
     localtime_r(&now, &timeinfo);
     strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S", &timeinfo);
 
-    // read saved UID from NVS
+    // read saved (target) UID from in-memory cache populated by RFID_Sensor
     char target_str[64] = {0};
-    nvs_handle_t nvs_handle;
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle) == ESP_OK) {
-        size_t required = 0;
-        if (nvs_get_blob(nvs_handle, NVS_KEY_SAVED_UID, NULL, &required) == ESP_OK && required > 0) {
-            uint8_t *buf = malloc(required);
-            if (buf) {
-                if (nvs_get_blob(nvs_handle, NVS_KEY_SAVED_UID, buf, &required) == ESP_OK) {
-                    uid_to_hex(buf, required, target_str, sizeof(target_str));
-                }
-                free(buf);
-            }
-        }
-        nvs_close(nvs_handle);
+    uint8_t saved_buf[10];
+    size_t saved_len = 0;
+    if (RFID_get_saved_uid(saved_buf, &saved_len)) {
+        uid_to_hex(saved_buf, saved_len, target_str, sizeof(target_str));
     }
 
     // read current detected UID
@@ -73,6 +64,7 @@ static esp_err_t status_get_handler(httpd_req_t *req)
     }
 
     httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
     char resp[512];
     snprintf(resp, sizeof(resp), "{\"time\":\"%s\",\"target\":\"%s\",\"current\":\"%s\"}",
              timebuf, target_str, current_str);
@@ -93,12 +85,17 @@ static esp_err_t reset_post_handler(httpd_req_t *req)
     }
     if (res == ESP_OK) {
         RFID_clear_last_uid();
+        RFID_clear_saved_uid();
+        /* Ensure LED returns to blue when target is reset */
+        rgb_set_color(false, false, true);
         httpd_resp_sendstr(req, "OK");
         return ESP_OK;
     }
     httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to reset");
     return ESP_FAIL;
 }
+
+/* Note: manual set-target endpoint removed; the target is auto-saved on first detection */
 
 static esp_err_t root_get_handler(httpd_req_t *req)
 {
@@ -111,7 +108,7 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "<div><strong>Target Tag:</strong> <span id=\"target\">-</span></div>"
         "<div><strong>Current Tag:</strong> <span id=\"current\">-</span></div>"
         "<div style=\"margin-top:12px;\"><button id=\"reset\">Reset Target Tag</button></div>"
-        "<script>async function update(){try{let r=await fetch('/status');let j=await r.json();document.getElementById('time').innerText=j.time||'-';document.getElementById('target').innerText=j.target||'-';document.getElementById('current').innerText=j.current||'-';}catch(e){console.log(e);}setTimeout(update,1000);}document.getElementById('reset').addEventListener('click',async()=>{await fetch('/reset',{method:'POST'});});update();</script>"
+        "<script>async function update(){try{let r=await fetch('/status',{cache:'no-store'});let j=await r.json();document.getElementById('time').innerText=j.time||'-';document.getElementById('target').innerText=j.target||'-';document.getElementById('current').innerText=j.current||'-';}catch(e){console.log(e);}setTimeout(update,1000);}document.getElementById('reset').addEventListener('click',async()=>{await fetch('/reset',{method:'POST'});});update();</script>"
         "</body></html>";
 
     httpd_resp_set_type(req, "text/html");
@@ -123,7 +120,8 @@ void RFID_Webpage_init(void)
 {
     // initialize SNTP to provide real time
     ESP_LOGI(TAG, "Initializing SNTP");
-    sntp_set_operating_mode(SNTP_OPMODE_POLL);
+    /* Use lwIP SNTP API name */
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
     sntp_setservername(0, "pool.ntp.org");
     sntp_init();
 
@@ -165,6 +163,8 @@ void RFID_Webpage_init(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(server, &reset);
+
+    // manual /set_target endpoint intentionally not registered; automatic target selection enabled
 
     ESP_LOGI(TAG, "Web UI available at http://personstd-esp32s3.local/");
 }

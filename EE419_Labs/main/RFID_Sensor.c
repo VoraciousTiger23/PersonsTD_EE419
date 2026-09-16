@@ -2,6 +2,10 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+
 #include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -36,6 +40,12 @@ static uint8_t s_last_uid[10];
 static size_t s_last_uid_len = 0;
 static bool s_last_uid_present = false;
 static SemaphoreHandle_t s_last_uid_mutex = NULL;
+
+// Saved (target) UID storage
+static uint8_t s_saved_uid[10];
+static size_t s_saved_uid_len = 0;
+static bool s_saved_uid_present = false;
+static SemaphoreHandle_t s_saved_uid_mutex = NULL;
 
 void RFID_set_last_uid(const uint8_t *uid, size_t len)
 {
@@ -81,6 +91,50 @@ void RFID_clear_last_uid(void)
     }
 }
 
+void RFID_set_saved_uid(const uint8_t *uid, size_t len)
+{
+    if (!s_saved_uid_mutex) s_saved_uid_mutex = xSemaphoreCreateMutex();
+    if (!s_saved_uid_mutex) return;
+    if (xSemaphoreTake(s_saved_uid_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        size_t n = len;
+        if (n > sizeof(s_saved_uid)) n = sizeof(s_saved_uid);
+        memcpy(s_saved_uid, uid, n);
+        s_saved_uid_len = n;
+        s_saved_uid_present = true;
+        xSemaphoreGive(s_saved_uid_mutex);
+    }
+}
+
+bool RFID_get_saved_uid(uint8_t *buf, size_t *len)
+{
+    if (!s_saved_uid_mutex) s_saved_uid_mutex = xSemaphoreCreateMutex();
+    if (!s_saved_uid_mutex) return false;
+    bool present = false;
+    if (xSemaphoreTake(s_saved_uid_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        if (s_saved_uid_present) {
+            memcpy(buf, s_saved_uid, s_saved_uid_len);
+            *len = s_saved_uid_len;
+            present = true;
+        } else {
+            *len = 0;
+            present = false;
+        }
+        xSemaphoreGive(s_saved_uid_mutex);
+    }
+    return present;
+}
+
+void RFID_clear_saved_uid(void)
+{
+    if (!s_saved_uid_mutex) s_saved_uid_mutex = xSemaphoreCreateMutex();
+    if (!s_saved_uid_mutex) return;
+    if (xSemaphoreTake(s_saved_uid_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        s_saved_uid_present = false;
+        s_saved_uid_len = 0;
+        xSemaphoreGive(s_saved_uid_mutex);
+    }
+}
+
 void rgb_set_color(bool red, bool green, bool blue)
 {
     gpio_set_level(RGB_RED_GPIO, red ? 1 : 0);
@@ -112,6 +166,8 @@ static void pn532_scan_task(void *arg)
                 if (nvs_get_blob(nvs_handle, NVS_KEY_SAVED_UID, saved_uid, &saved_len) == ESP_OK) {
                     has_saved = true;
                     ESP_LOGI(TAG, "Loaded saved UID (len=%d)", (int)saved_len);
+                    // populate saved-UID cache for web UI
+                    RFID_set_saved_uid(saved_uid, saved_len);
                 } else {
                     free(saved_uid);
                     saved_uid = NULL;
@@ -119,6 +175,7 @@ static void pn532_scan_task(void *arg)
                 }
             }
         }
+        nvs_close(nvs_handle);
     }
 
     // Configure LED GPIOs
@@ -169,6 +226,10 @@ static void pn532_scan_task(void *arg)
     uint8_t uid_len = sizeof(uid);
 
     while (1) {
+        // refresh saved state from shared cache so resets take effect immediately
+        uint8_t tmp_saved[10]; size_t tmp_saved_len = 0;
+        has_saved = RFID_get_saved_uid(tmp_saved, &tmp_saved_len);
+
         uid_len = sizeof(uid);
         esp_err_t r = pn532_read_passive_target_id(io_handle, PN532_BRTY_ISO14443A_106KBPS, uid, &uid_len, 1000);
         if (r == ESP_OK) {
@@ -176,26 +237,30 @@ static void pn532_scan_task(void *arg)
             RFID_set_last_uid(uid, uid_len);
             ESP_LOGI(TAG, "Tag detected len=%d", uid_len);
             if (!has_saved) {
-                // store first seen UID to NVS
-                if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle) == ESP_OK) {
-                    esp_err_t serr = nvs_set_blob(nvs_handle, NVS_KEY_SAVED_UID, uid, uid_len);
+                // No saved target: auto-save the first detected tag as target
+                nvs_handle_t nvs_handle2;
+                esp_err_t e = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle2);
+                if (e == ESP_OK) {
+                    esp_err_t serr = nvs_set_blob(nvs_handle2, NVS_KEY_SAVED_UID, uid, uid_len);
                     if (serr == ESP_OK) {
-                        nvs_commit(nvs_handle);
+                        nvs_commit(nvs_handle2);
+                        RFID_set_saved_uid(uid, uid_len);
                         has_saved = true;
-                        saved_len = uid_len;
-                        saved_uid = malloc(saved_len);
-                        if (saved_uid) memcpy(saved_uid, uid, saved_len);
-                        ESP_LOGI(TAG, "Saved UID to NVS");
+                        ESP_LOGI(TAG, "Auto-saved UID as target (len=%d)", uid_len);
+                        rgb_set_color(false, true, false); // green
                     } else {
-                        ESP_LOGE(TAG, "Failed to save UID to NVS: %d", serr);
+                        ESP_LOGE(TAG, "Failed to auto-save UID: %d", serr);
+                        // keep blue until successful save
+                        rgb_set_color(false, false, true);
                     }
-                    nvs_close(nvs_handle);
+                    nvs_close(nvs_handle2);
+                } else {
+                    ESP_LOGE(TAG, "NVS open failed for auto-save: %d", e);
+                    rgb_set_color(false, false, true);
                 }
-                // show green for saved tag
-                rgb_set_color(false, true, false);
             } else {
-                // compare with saved
-                if (uid_equal(uid, uid_len, saved_uid, saved_len)) {
+                // compare with saved (from shared cache)
+                if (tmp_saved_len > 0 && uid_equal(uid, uid_len, tmp_saved, tmp_saved_len)) {
                     rgb_set_color(false, true, false); // green
                 } else {
                     rgb_set_color(true, false, false); // red
@@ -206,7 +271,7 @@ static void pn532_scan_task(void *arg)
             // clear last-detected UID when no tag present
             RFID_clear_last_uid();
             if (!has_saved) {
-                // keep blue until first detection
+                // keep blue until a target is set
                 rgb_set_color(false, false, true);
             } else {
                 rgb_set_color(false, false, false); // off

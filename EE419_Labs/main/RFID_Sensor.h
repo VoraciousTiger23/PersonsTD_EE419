@@ -15,3 +15,9 @@ void rgb_set_color(bool red, bool green, bool blue);
 void RFID_set_last_uid(const uint8_t *uid, size_t len);
 bool RFID_get_last_uid(uint8_t *buf, size_t *len);
 void RFID_clear_last_uid(void);
+
+// Saved (target) UID accessors
+// `buf` must have space for up to 10 bytes. On success `*len` is set.
+void RFID_set_saved_uid(const uint8_t *uid, size_t len);
+bool RFID_get_saved_uid(uint8_t *buf, size_t *len);
+void RFID_clear_saved_uid(void);
