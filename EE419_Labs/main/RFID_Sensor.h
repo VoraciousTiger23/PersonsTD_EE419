@@ -21,3 +21,9 @@ void RFID_clear_last_uid(void);
 void RFID_set_saved_uid(const uint8_t *uid, size_t len);
 bool RFID_get_saved_uid(uint8_t *buf, size_t *len);
 void RFID_clear_saved_uid(void);
+
+// MQTT-provided configuration for the active target tag and idle flash count.
+void RFID_set_flash_count(int count);
+int RFID_get_flash_count(void);
+void RFID_set_target_tag_hex(const char *tag_hex);
+bool RFID_get_target_tag_hex(char *buf, size_t len);

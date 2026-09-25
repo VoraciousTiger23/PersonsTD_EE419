@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <ctype.h>
 
 #include "driver/gpio.h"
 #include "esp_err.h"
@@ -12,12 +13,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
-#include "nvs.h"
-#include "nvs_flash.h"
 
 #include "pn532.h"
 #include "pn532_driver_spi.h"
 #include "driver/spi_master.h"
+
+#include "MQTT_RPi.h"
 
 static const char *TAG = "RFID_Sensor";
 
@@ -31,21 +32,20 @@ static const char *TAG = "RFID_Sensor";
 #define PN532_MOSI_PIN ((gpio_num_t)12)
 #define PN532_SS_PIN   ((gpio_num_t)13)
 
-// NVS namespace/key
-#define NVS_NAMESPACE "rfid"
-#define NVS_KEY_SAVED_UID "saved_uid"
-
 // Last-detected UID storage (shared with web UI)
 static uint8_t s_last_uid[10];
 static size_t s_last_uid_len = 0;
 static bool s_last_uid_present = false;
 static SemaphoreHandle_t s_last_uid_mutex = NULL;
 
-// Saved (target) UID storage
+// Saved (target) UID storage, supplied by MQTT at runtime and kept in memory only.
 static uint8_t s_saved_uid[10];
 static size_t s_saved_uid_len = 0;
 static bool s_saved_uid_present = false;
 static SemaphoreHandle_t s_saved_uid_mutex = NULL;
+
+static int s_flash_count = 0;
+static SemaphoreHandle_t s_flash_count_mutex = NULL;
 
 void RFID_set_last_uid(const uint8_t *uid, size_t len)
 {
@@ -135,6 +135,92 @@ void RFID_clear_saved_uid(void)
     }
 }
 
+void RFID_set_flash_count(int count)
+{
+    if (!s_flash_count_mutex) s_flash_count_mutex = xSemaphoreCreateMutex();
+    if (!s_flash_count_mutex) return;
+    if (xSemaphoreTake(s_flash_count_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        s_flash_count = count < 0 ? 0 : count;
+        xSemaphoreGive(s_flash_count_mutex);
+    }
+}
+
+int RFID_get_flash_count(void)
+{
+    if (!s_flash_count_mutex) s_flash_count_mutex = xSemaphoreCreateMutex();
+    if (!s_flash_count_mutex) return 0;
+    int count = 0;
+    if (xSemaphoreTake(s_flash_count_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        count = s_flash_count;
+        xSemaphoreGive(s_flash_count_mutex);
+    }
+    return count;
+}
+
+void RFID_set_target_tag_hex(const char *tag_hex)
+{
+    if (!tag_hex) {
+        RFID_clear_saved_uid();
+        return;
+    }
+
+    char cleaned[17] = {0};
+    size_t cleaned_len = 0;
+    for (const char *p = tag_hex; *p != '\0' && cleaned_len < sizeof(cleaned) - 1; ++p) {
+        unsigned char c = (unsigned char)*p;
+        if (isxdigit(c)) {
+            cleaned[cleaned_len++] = (char)toupper(c);
+        }
+    }
+
+    if (cleaned_len == 0) {
+        RFID_clear_saved_uid();
+        return;
+    }
+
+    if (cleaned_len % 2 != 0) {
+        cleaned_len--;
+    }
+
+    uint8_t raw[10] = {0};
+    size_t raw_len = cleaned_len / 2;
+    if (raw_len > sizeof(raw)) {
+        raw_len = sizeof(raw);
+    }
+
+    for (size_t i = 0; i < raw_len; ++i) {
+        char pair[3] = { cleaned[i * 2], cleaned[i * 2 + 1], '\0' };
+        raw[i] = (uint8_t)strtoul(pair, NULL, 16);
+    }
+
+    RFID_set_saved_uid(raw, raw_len);
+}
+
+bool RFID_get_target_tag_hex(char *buf, size_t len)
+{
+    if (!buf || len == 0) {
+        return false;
+    }
+
+    uint8_t raw[10];
+    size_t raw_len = 0;
+    if (!RFID_get_saved_uid(raw, &raw_len) || raw_len == 0) {
+        buf[0] = '\0';
+        return false;
+    }
+
+    size_t pos = 0;
+    for (size_t i = 0; i < raw_len && pos + 3 < len; ++i) {
+        int written = snprintf(buf + pos, len - pos, "%02X", raw[i]);
+        if (written < 0) {
+            break;
+        }
+        pos += (size_t)written;
+    }
+    buf[pos] = '\0';
+    return true;
+}
+
 void rgb_set_color(bool red, bool green, bool blue)
 {
     gpio_set_level(RGB_RED_GPIO, red ? 1 : 0);
@@ -148,36 +234,31 @@ static bool uid_equal(const uint8_t *a, size_t a_len, const uint8_t *b, size_t b
     return memcmp(a, b, a_len) == 0;
 }
 
+static void flash_indicator(bool match, int count)
+{
+    if (count <= 0) {
+        rgb_set_color(false, false, false);
+        return;
+    }
+
+    for (int i = 0; i < count; ++i) {
+        if (match) {
+            rgb_set_color(false, true, false);
+        } else {
+            rgb_set_color(true, false, false);
+        }
+        vTaskDelay(pdMS_TO_TICKS(200));
+        rgb_set_color(false, false, false);
+        if (i + 1 < count) {
+            vTaskDelay(pdMS_TO_TICKS(200));
+        }
+    }
+    vTaskDelay(pdMS_TO_TICKS(1000));
+}
+
 // Task: initialize PN532 and continuously scan for tags
 static void pn532_scan_task(void *arg)
 {
-    // Initialize NVS handle
-    nvs_handle_t nvs_handle;
-    bool has_saved = false;
-    uint8_t *saved_uid = NULL;
-    size_t saved_len = 0;
-
-    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle) == ESP_OK) {
-        // read blob size
-        esp_err_t err = nvs_get_blob(nvs_handle, NVS_KEY_SAVED_UID, NULL, &saved_len);
-        if (err == ESP_OK && saved_len > 0) {
-            saved_uid = calloc(1, saved_len);
-            if (saved_uid) {
-                if (nvs_get_blob(nvs_handle, NVS_KEY_SAVED_UID, saved_uid, &saved_len) == ESP_OK) {
-                    has_saved = true;
-                    ESP_LOGI(TAG, "Loaded saved UID (len=%d)", (int)saved_len);
-                    // populate saved-UID cache for web UI
-                    RFID_set_saved_uid(saved_uid, saved_len);
-                } else {
-                    free(saved_uid);
-                    saved_uid = NULL;
-                    saved_len = 0;
-                }
-            }
-        }
-        nvs_close(nvs_handle);
-    }
-
     // Configure LED GPIOs
     gpio_config_t io_conf = {
         .pin_bit_mask = (1ULL << RGB_RED_GPIO) | (1ULL << RGB_GREEN_GPIO) | (1ULL << RGB_BLUE_GPIO),
@@ -188,13 +269,7 @@ static void pn532_scan_task(void *arg)
     };
     ESP_ERROR_CHECK(gpio_config(&io_conf));
 
-    // If no saved UID, show blue until first detection
-    if (!has_saved) {
-        rgb_set_color(false, false, true);
-    } else {
-        // start with LED off
-        rgb_set_color(false, false, false);
-    }
+    rgb_set_color(false, false, false);
 
     // allocate io handle
     pn532_io_t io;
@@ -226,63 +301,40 @@ static void pn532_scan_task(void *arg)
     uint8_t uid_len = sizeof(uid);
 
     while (1) {
-        // refresh saved state from shared cache so resets take effect immediately
         uint8_t tmp_saved[10]; size_t tmp_saved_len = 0;
-        has_saved = RFID_get_saved_uid(tmp_saved, &tmp_saved_len);
+        bool has_target = RFID_get_saved_uid(tmp_saved, &tmp_saved_len);
 
         uid_len = sizeof(uid);
         esp_err_t r = pn532_read_passive_target_id(io_handle, PN532_BRTY_ISO14443A_106KBPS, uid, &uid_len, 1000);
         if (r == ESP_OK) {
-            // update last-detected UID for web UI
             RFID_set_last_uid(uid, uid_len);
             ESP_LOGI(TAG, "Tag detected len=%d", uid_len);
-            if (!has_saved) {
-                // No saved target: auto-save the first detected tag as target
-                nvs_handle_t nvs_handle2;
-                esp_err_t e = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle2);
-                if (e == ESP_OK) {
-                    esp_err_t serr = nvs_set_blob(nvs_handle2, NVS_KEY_SAVED_UID, uid, uid_len);
-                    if (serr == ESP_OK) {
-                        nvs_commit(nvs_handle2);
-                        RFID_set_saved_uid(uid, uid_len);
-                        has_saved = true;
-                        ESP_LOGI(TAG, "Auto-saved UID as target (len=%d)", uid_len);
-                        rgb_set_color(false, true, false); // green
-                    } else {
-                        ESP_LOGE(TAG, "Failed to auto-save UID: %d", serr);
-                        // keep blue until successful save
-                        rgb_set_color(false, false, true);
-                    }
-                    nvs_close(nvs_handle2);
-                } else {
-                    ESP_LOGE(TAG, "NVS open failed for auto-save: %d", e);
-                    rgb_set_color(false, false, true);
-                }
+
+            bool matches = has_target && tmp_saved_len > 0 && uid_equal(uid, uid_len, tmp_saved, tmp_saved_len);
+            MQTT_RPi_publish_status(matches);
+
+            int flash_count = RFID_get_flash_count();
+            if (has_target && flash_count > 0) {
+                flash_indicator(matches, flash_count);
+            } else if (matches) {
+                rgb_set_color(false, true, false);
+                vTaskDelay(pdMS_TO_TICKS(500));
+                rgb_set_color(false, false, false);
+            } else if (has_target) {
+                rgb_set_color(true, false, false);
+                vTaskDelay(pdMS_TO_TICKS(500));
+                rgb_set_color(false, false, false);
             } else {
-                // compare with saved (from shared cache)
-                if (tmp_saved_len > 0 && uid_equal(uid, uid_len, tmp_saved, tmp_saved_len)) {
-                    rgb_set_color(false, true, false); // green
-                } else {
-                    rgb_set_color(true, false, false); // red
-                }
+                rgb_set_color(false, false, false);
             }
         } else {
-            // no tag detected in timeout
-            // clear last-detected UID when no tag present
             RFID_clear_last_uid();
-            if (!has_saved) {
-                // keep blue until a target is set
-                rgb_set_color(false, false, true);
-            } else {
-                rgb_set_color(false, false, false); // off
-            }
+            rgb_set_color(false, false, false);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(300));
+        vTaskDelay(pdMS_TO_TICKS(200));
     }
 
-    // cleanup (never reached)
-    if (saved_uid) free(saved_uid);
     pn532_delete_driver(io_handle);
     vTaskDelete(NULL);
 }

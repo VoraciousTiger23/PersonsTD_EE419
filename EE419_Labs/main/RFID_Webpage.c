@@ -7,8 +7,6 @@
 #include <stdint.h>
 
 #include "esp_log.h"
-#include "nvs.h"
-#include "nvs_flash.h"
 #include "mdns.h"
 #include "lwip/apps/sntp.h"
 #include "esp_err.h"
@@ -17,9 +15,6 @@
 #include "RFID_Sensor.h"
 
 static const char *TAG = "RFID_Webpage";
-
-#define NVS_NAMESPACE "rfid"
-#define NVS_KEY_SAVED_UID "saved_uid"
 
 static void uid_to_hex(const uint8_t *uid, size_t len, char *out, size_t out_len)
 {
@@ -74,28 +69,14 @@ static esp_err_t status_get_handler(httpd_req_t *req)
 
 static esp_err_t reset_post_handler(httpd_req_t *req)
 {
-    nvs_handle_t nvs_handle;
-    esp_err_t res = ESP_FAIL;
-    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle) == ESP_OK) {
-        res = nvs_erase_key(nvs_handle, NVS_KEY_SAVED_UID);
-        if (res == ESP_OK) {
-            nvs_commit(nvs_handle);
-        }
-        nvs_close(nvs_handle);
-    }
-    if (res == ESP_OK) {
-        RFID_clear_last_uid();
-        RFID_clear_saved_uid();
-        /* Ensure LED returns to blue when target is reset */
-        rgb_set_color(false, false, true);
-        httpd_resp_sendstr(req, "OK");
-        return ESP_OK;
-    }
-    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to reset");
-    return ESP_FAIL;
+    RFID_clear_last_uid();
+    RFID_clear_saved_uid();
+    rgb_set_color(false, false, false);
+    httpd_resp_sendstr(req, "OK");
+    return ESP_OK;
 }
 
-/* Note: manual set-target endpoint removed; the target is auto-saved on first detection */
+/* Target selection is supplied by the MQTT broker and stored in memory only. */
 
 static esp_err_t root_get_handler(httpd_req_t *req)
 {

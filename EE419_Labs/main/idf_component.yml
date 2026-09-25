@@ -16,3 +16,4 @@ dependencies:
   #   public: true
   garag/esp-idf-pn532: '*'
   espressif/mdns: '*'
+  espressif/mqtt: '*'

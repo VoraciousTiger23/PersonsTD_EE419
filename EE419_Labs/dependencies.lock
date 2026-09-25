@@ -9,6 +9,16 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.13.1
+  espressif/mqtt:
+    component_hash: fb18bc3b65aa8c94693a9811ffc322cca8a65d92d5ec84983d3e385080e3969c
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.3'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.0
   garag/esp-idf-pn532:
     component_hash: aac8ca6ebb69a2b4e344991fa1764d2d298ae44bb90f308794a52bc8104c1d9f
     dependencies:
@@ -25,8 +35,9 @@ dependencies:
     version: 6.1.0
 direct_dependencies:
 - espressif/mdns
+- espressif/mqtt
 - garag/esp-idf-pn532
 - idf
-manifest_hash: 16ed0c90766a2c0c83d731faf555b79d224a5a35f07294f48a38570947a05538
+manifest_hash: 13dd58f254606c67c55fc13e8456444f97dec63f1531d53a4c609a614149527b
 target: esp32s3
 version: 3.0.0
