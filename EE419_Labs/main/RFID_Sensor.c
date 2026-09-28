@@ -46,6 +46,17 @@ static SemaphoreHandle_t s_saved_uid_mutex = NULL;
 
 static int s_flash_count = 0;
 static SemaphoreHandle_t s_flash_count_mutex = NULL;
+static bool s_last_reported_target_found = false;
+static bool s_target_status_initialized = false;
+
+static void publish_target_status_if_changed(bool target_found)
+{
+    if (!s_target_status_initialized || s_last_reported_target_found != target_found) {
+        MQTT_RPi_publish_status(target_found);
+        s_last_reported_target_found = target_found;
+        s_target_status_initialized = true;
+    }
+}
 
 void RFID_set_last_uid(const uint8_t *uid, size_t len)
 {
@@ -315,10 +326,11 @@ static void pn532_scan_task(void *arg)
             ESP_LOGI(TAG, "Tag detected len=%d", uid_len);
 
             bool matches = has_target && tmp_saved_len > 0 && uid_equal(uid, uid_len, tmp_saved, tmp_saved_len);
-            if (!matches && has_target) {
-                MQTT_RPi_publish_status(false);
+            if (has_target) {
+                publish_target_status_if_changed(matches);
             } else {
-                MQTT_RPi_publish_status(matches);
+                s_target_status_initialized = false;
+                s_last_reported_target_found = false;
             }
 
             if (has_target && flash_count > 0) {
@@ -333,7 +345,10 @@ static void pn532_scan_task(void *arg)
         } else {
             RFID_clear_last_uid();
             if (has_target) {
-                MQTT_RPi_publish_status(false);
+                publish_target_status_if_changed(false);
+            } else {
+                s_target_status_initialized = false;
+                s_last_reported_target_found = false;
             }
             if (has_target && flash_count > 0) {
                 flash_indicator(false, flash_count);
