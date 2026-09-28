@@ -247,12 +247,15 @@ static void flash_indicator(bool match, int count)
         } else {
             rgb_set_color(true, false, false);
         }
+
         vTaskDelay(pdMS_TO_TICKS(200));
         rgb_set_color(false, false, false);
+
         if (i + 1 < count) {
             vTaskDelay(pdMS_TO_TICKS(200));
         }
     }
+
     vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
@@ -303,6 +306,7 @@ static void pn532_scan_task(void *arg)
     while (1) {
         uint8_t tmp_saved[10]; size_t tmp_saved_len = 0;
         bool has_target = RFID_get_saved_uid(tmp_saved, &tmp_saved_len);
+        int flash_count = RFID_get_flash_count();
 
         uid_len = sizeof(uid);
         esp_err_t r = pn532_read_passive_target_id(io_handle, PN532_BRTY_ISO14443A_106KBPS, uid, &uid_len, 1000);
@@ -311,17 +315,16 @@ static void pn532_scan_task(void *arg)
             ESP_LOGI(TAG, "Tag detected len=%d", uid_len);
 
             bool matches = has_target && tmp_saved_len > 0 && uid_equal(uid, uid_len, tmp_saved, tmp_saved_len);
-            MQTT_RPi_publish_status(matches);
+            if (!matches && has_target) {
+                MQTT_RPi_publish_status(false);
+            } else {
+                MQTT_RPi_publish_status(matches);
+            }
 
-            int flash_count = RFID_get_flash_count();
             if (has_target && flash_count > 0) {
                 flash_indicator(matches, flash_count);
             } else if (matches) {
                 rgb_set_color(false, true, false);
-                vTaskDelay(pdMS_TO_TICKS(500));
-                rgb_set_color(false, false, false);
-            } else if (has_target) {
-                rgb_set_color(true, false, false);
                 vTaskDelay(pdMS_TO_TICKS(500));
                 rgb_set_color(false, false, false);
             } else {
@@ -329,7 +332,11 @@ static void pn532_scan_task(void *arg)
             }
         } else {
             RFID_clear_last_uid();
-            rgb_set_color(false, false, false);
+            if (has_target && flash_count > 0) {
+                flash_indicator(false, flash_count);
+            } else {
+                rgb_set_color(false, false, false);
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(200));
