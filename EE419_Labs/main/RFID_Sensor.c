@@ -332,6 +332,9 @@ static void pn532_scan_task(void *arg)
             }
         } else {
             RFID_clear_last_uid();
+            if (has_target) {
+                MQTT_RPi_publish_status(false);
+            }
             if (has_target && flash_count > 0) {
                 flash_indicator(false, flash_count);
             } else {

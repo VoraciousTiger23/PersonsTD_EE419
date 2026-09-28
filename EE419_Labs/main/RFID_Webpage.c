@@ -146,6 +146,5 @@ void RFID_Webpage_init(void)
     httpd_register_uri_handler(server, &reset);
 
     // manual /set_target endpoint intentionally not registered; automatic target selection enabled
-
     ESP_LOGI(TAG, "Web UI available at http://personstd-esp32s3.local/");
 }
