@@ -1,0 +1,39 @@
+menu "EE 419 Configuration"
+
+    config LED_RED_PIN
+        int "Red LED gpio number"
+        default 9
+        help
+            GPIO number for the red LED.
+        
+    config LED_GREEN_PIN
+        int "Green LED gpio number"
+        default 6
+        help
+            GPIO number for the green LED.
+            
+    config LED_BLUE_PIN
+        int "Blue LED gpio number"
+        default 5
+        help
+            GPIO number for the blue LED.
+
+     config MQTT_BROKER
+        string "AWS Endpoint"
+        default "Replace with your AWS endpoint"
+        help
+            Name of MQTT broker
+
+    config MQTT_PORT
+        int "MQTT port"
+        default 443
+        help
+            Port used for MQTT broker
+
+    config MQTT_QOS
+        int "MQTT Quality of Service"
+        range 0 1
+        default 1
+        help
+            QoS value for MQTT messages           
+endmenu
