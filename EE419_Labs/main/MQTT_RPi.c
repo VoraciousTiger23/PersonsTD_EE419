@@ -15,13 +15,20 @@
 static const char *TAG = "MQTT_RPi";
 
 #define DEVICE_ID "personstd-esp32s3"
-#define MQTT_REGISTER_TOPIC "lab3/register"
-#define MQTT_COMMAND_TOPIC "lab3/" DEVICE_ID "/cmd"
-#define MQTT_STATUS_TOPIC "lab3/" DEVICE_ID "/status"
-#define MQTT_UNREGISTER_TOPIC "lab3/unregister"
-#define MQTT_BROKER_HOST "NEB426.local"
+#define MQTT_REGISTER_TOPIC "ee419_lab/register"
+#define MQTT_COMMAND_TOPIC "ee419_lab/" DEVICE_ID "/cmd"
+#define MQTT_STATUS_TOPIC "ee419_lab/" DEVICE_ID "/status"
+#define MQTT_UNREGISTER_TOPIC "ee419_lab/unregister"
 
 static esp_mqtt_client_handle_t g_client = NULL;
+
+// x509 certificates stored externally
+extern const uint8_t device_cert_pem_start[] asm("_binary_device_cert_pem_crt_start");
+extern const uint8_t device_cert_pem_end[] asm("_binary_device_cert_pem_crt_end");
+extern const uint8_t device_key_pem_start[] asm("_binary_device_private_key_start");
+extern const uint8_t device_key_pem_end[] asm("_binary_device_private_key_end");
+extern const uint8_t server_cert_pem_start[] asm("_binary_AmazonRootCA1_pem_start");
+extern const uint8_t server_cert_pem_end[] asm("_binary_AmazonRootCA1_pem_end");
 
 void MQTT_RPi_publish_status(bool targetFound)
 {
@@ -210,33 +217,51 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
 static void resolve_host_and_connect(void)
 {
-    ESP_LOGI(TAG, "Resolving broker host %s via mDNS", MQTT_BROKER_HOST);
-
     esp_err_t err = mdns_init();
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(TAG, "mdns_init failed: %d", err);
     }
 
-    const char *broker_uri = "mqtt://NEB426.local:1883";
+    const char *alpn_protos[] = {"x-amzn-mqtt-ca", NULL};
 
     esp_mqtt_client_config_t mqtt_cfg = {
-        .broker = {
+    .broker = {
             .address = {
-                .uri = broker_uri,
+                .hostname = CONFIG_MQTT_BROKER,
+                .port = CONFIG_MQTT_PORT,
+                .transport = MQTT_TRANSPORT_OVER_SSL
             },
+       .verification = {
+          .certificate = (const char *) server_cert_pem_start,
+          .certificate_len = 0,
+          .alpn_protos = alpn_protos
+       }
+    },
+    .credentials = {
+       .username = NULL,
+       .client_id = "personstd-esp32s3",
+       .set_null_client_id = false,
+       .authentication = {
+          .password = NULL,
+          .certificate = (const char*) device_cert_pem_start,
+          .certificate_len = 0,
+          .key = (const char*) device_key_pem_start,
+          .key_len = 0,
+          .key_password = NULL,
+          .key_password_len = 0,
+          .use_secure_element = false,
+          .ds_data = NULL
+       } 
+    },
+    .session = {
+          .last_will = {
+          .topic = MQTT_UNREGISTER_TOPIC,
+          .msg = "{\"deviceId\":\"" DEVICE_ID "\"}",
+          .qos = 0,
+          .retain = false,
         },
-        .session = {
-            .last_will = {
-                .topic = MQTT_UNREGISTER_TOPIC,
-                .msg = "{\"deviceId\":\"personstd-esp32s3\"}",
-                .qos = 1,
-                .retain = 0,
-            },
-            .protocol_ver = MQTT_PROTOCOL_V_3_1_1,
-        },
-        .buffer = {
-            .size = 2048,
-        },
+        .keepalive = 60
+    },
     };
 
     g_client = esp_mqtt_client_init(&mqtt_cfg);
@@ -254,6 +279,5 @@ static void resolve_host_and_connect(void)
 
 void MQTT_RPi_init(void)
 {
-    ESP_LOGI(TAG, "MQTT_RPi_init: starting broker resolution for %s", "NEB426.local");
     resolve_host_and_connect();
 }
