@@ -16,7 +16,7 @@
 
 #include "WiFi_Connect.h"
 #include "RFID_Sensor.h"
-#include "MQTT_RPi.h"
+#include "MQTT_broker.h"
 
 static const char *TAG = "EE419_LAB1";
 void app_main(void)
@@ -41,7 +41,7 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Starting EE419 lab application");
     WiFi_Connect();
-    MQTT_RPi_init();
+    MQTT_broker_init();
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
