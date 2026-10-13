@@ -18,7 +18,7 @@
 #include "pn532_driver_spi.h"
 #include "driver/spi_master.h"
 
-#include "MQTT_RPi.h"
+#include "MQTT_broker.h"
 
 static const char *TAG = "RFID_Sensor";
 
@@ -52,7 +52,7 @@ static bool s_target_status_initialized = false;
 static void publish_target_status_if_changed(bool target_found)
 {
     if (!s_target_status_initialized || s_last_reported_target_found != target_found) {
-        MQTT_RPi_publish_status(target_found);
+        MQTT_broker_publish_status(target_found);
         s_last_reported_target_found = target_found;
         s_target_status_initialized = true;
     }
@@ -245,6 +245,27 @@ static bool uid_equal(const uint8_t *a, size_t a_len, const uint8_t *b, size_t b
     return memcmp(a, b, a_len) == 0;
 }
 
+static void log_new_uid_if_first_seen(const uint8_t *uid, size_t uid_len)
+{
+    uint8_t previous_uid[10] = {0};
+    size_t previous_len = 0;
+    if (RFID_get_last_uid(previous_uid, &previous_len) && previous_len == uid_len && uid_equal(uid, uid_len, previous_uid, previous_len)) {
+        return;
+    }
+
+    size_t bytes_to_print = uid_len < 4 ? uid_len : 4;
+    char uid_hex[17] = {0};
+    size_t pos = 0;
+    for (size_t i = 0; i < bytes_to_print && pos + 2 < sizeof(uid_hex); ++i) {
+        int written = snprintf(uid_hex + pos, sizeof(uid_hex) - pos, "%02X", uid[i]);
+        if (written > 0) {
+            pos += (size_t)written;
+        }
+    }
+
+    ESP_LOGI(TAG, "New NFC detected first time: UID=%s", uid_hex);
+}
+
 static void flash_indicator(bool match, int count)
 {
     if (count <= 0) {
@@ -322,6 +343,7 @@ static void pn532_scan_task(void *arg)
         uid_len = sizeof(uid);
         esp_err_t r = pn532_read_passive_target_id(io_handle, PN532_BRTY_ISO14443A_106KBPS, uid, &uid_len, 1000);
         if (r == ESP_OK) {
+            log_new_uid_if_first_seen(uid, uid_len);
             RFID_set_last_uid(uid, uid_len);
             ESP_LOGI(TAG, "Tag detected len=%d", uid_len);
 
