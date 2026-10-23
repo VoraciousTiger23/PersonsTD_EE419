@@ -109,13 +109,13 @@ static void parse_target_tag(const char *payload, size_t len)
     char tag_buf[32] = {0};
     int flash_count = -1;
 
-    cJSON *tag_item = find_json_field(root, "targetTag");
+    cJSON *tag_item = find_json_field(root, "nfcTag");
     if (tag_item && cJSON_IsString(tag_item) && tag_item->valuestring) {
         snprintf(tag_buf, sizeof(tag_buf), "%s", tag_item->valuestring);
         has_tag = true;
     }
 
-    cJSON *count_item = find_json_field(root, "flashCount");
+    cJSON *count_item = find_json_field(root, "bitPosition");
     if (count_item) {
         if (cJSON_IsNumber(count_item)) {
             flash_count = count_item->valueint;
@@ -131,7 +131,7 @@ static void parse_target_tag(const char *payload, size_t len)
     }
 
     if (!has_tag && !has_count) {
-        ESP_LOGW(TAG, "Broker payload missing targetTag/flashCount: %s", payload);
+        ESP_LOGW(TAG, "Broker payload missing nfcTag/bitPosition: %s", payload);
         cJSON_Delete(root);
         return;
     }
@@ -149,21 +149,21 @@ static void parse_target_tag(const char *payload, size_t len)
 
             if (valid_hex) {
                 RFID_set_target_tag_hex(tag_buf);
-                ESP_LOGI(TAG, "Set target tag from broker: %s", tag_buf);
+                ESP_LOGI(TAG, "Set NFC tag from broker: %s", tag_buf);
             } else {
-                ESP_LOGW(TAG, "Invalid targetTag value from broker: %s", tag_buf);
+                ESP_LOGW(TAG, "Invalid nfcTag value from broker: %s", tag_buf);
             }
         } else {
-            ESP_LOGW(TAG, "Unexpected targetTag length from broker: %zu", tag_len);
+            ESP_LOGW(TAG, "Unexpected nfcTag length from broker: %zu", tag_len);
         }
     }
 
     if (has_count) {
         if (flash_count >= 0 && flash_count <= 10) {
             RFID_set_flash_count(flash_count);
-            ESP_LOGI(TAG, "Set flash count from broker: %d", flash_count);
+            ESP_LOGI(TAG, "Set bit position from broker: %d", flash_count);
         } else {
-            ESP_LOGW(TAG, "Flash count out of range from broker: %d", flash_count);
+            ESP_LOGW(TAG, "Bit position out of range from broker: %d", flash_count);
         }
     }
 
@@ -191,7 +191,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
                 ESP_LOGE(TAG, "Failed to publish registration payload to %s", MQTT_REGISTER_TOPIC);
                 break;
             }
-            ESP_LOGI(TAG, "Register publish msg_id=%d payload=%s", register_msg_id, payload);
+            ESP_LOGI(TAG, "Register publish msg_id=%d topic=%s payload=%s", register_msg_id, MQTT_REGISTER_TOPIC, payload);
             break;
 
         case MQTT_EVENT_DATA: {
