@@ -1,4 +1,4 @@
-idf_component_register(SRCS "RFID_Webpage.c" "main.c" "WiFi_Connect.c" "RFID_Sensor.c" "MQTT_broker.c"
+idf_component_register(SRCS "main.c" "WiFi_Connect.c" "clrGen.c"
                     INCLUDE_DIRS "."
-                    REQUIRES esp_wifi esp_http_server nvs_flash pn532 mdns lwip mqtt
-                    PRIV_REQUIRES esp_driver_gpio)
+                    REQUIRES esp_wifi nvs_flash esp_http_server
+                    PRIV_REQUIRES esp_driver_gpio esp_driver_spi)

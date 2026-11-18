@@ -15,8 +15,7 @@
 #include "nvs_flash.h"
 
 #include "WiFi_Connect.h"
-#include "RFID_Sensor.h"
-#include "MQTT_broker.h"
+#include "clrGen.h"
 
 static const char *TAG = "EE419_LAB1";
 void app_main(void)
@@ -28,7 +27,7 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(err);
 
-    RFID_Sensor_init();
+    clrGen_init();
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -37,11 +36,8 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_FLASH));
 
-    /* LED/task started by RFID_Sensor_init() */
-
     ESP_LOGI(TAG, "Starting EE419 lab application");
     WiFi_Connect();
-    MQTT_broker_init();
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));

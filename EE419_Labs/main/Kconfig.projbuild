@@ -18,6 +18,34 @@ menu "EE 419 Configuration"
         help
             GPIO number for the blue LED.
 
+    config TFT_MOSI_PIN
+        int "TFT MOSI GPIO"
+        default 23
+
+    config TFT_MISO_PIN
+        int "TFT MISO GPIO (-1 if unused)"
+        default 19
+
+    config TFT_SCK_PIN
+        int "TFT SCK GPIO"
+        default 18
+
+    config TFT_CS_PIN
+        int "TFT CS GPIO"
+        default 15
+
+    config TFT_DC_PIN
+        int "TFT DC GPIO"
+        default 33
+
+    config TFT_RST_PIN
+        int "TFT reset GPIO (-1 if unused)"
+        default -1
+
+    config TFT_BL_PIN
+        int "TFT backlight GPIO (-1 if always enabled)"
+        default -1
+
      config MQTT_BROKER
         string "AWS Endpoint"
         default "Replace with your AWS endpoint"

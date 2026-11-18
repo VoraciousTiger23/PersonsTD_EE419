@@ -16,7 +16,6 @@
 #include "nvs_flash.h"
 
 #include "WiFi_Connect.h"
-#include "RFID_Webpage.h"
 
 #define NVS_NAMESPACE      "wifi"
 #define NVS_KEY_SSID       "wifissid"
@@ -165,11 +164,6 @@ static void wifi_event_handler(
             TAG,
             "Connected. IP: " IPSTR,
             IP2STR(&event->ip_info.ip));
-        static bool webpage_started = false;
-        if (!webpage_started) {
-            webpage_started = true;
-            RFID_Webpage_init();
-        }
     }
 }
 
